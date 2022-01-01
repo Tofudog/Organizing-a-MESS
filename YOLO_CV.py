@@ -3,6 +3,11 @@ import cv2 as cv
 import numpy as np
 import time
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+from sklearn.cluster import KMeans
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -14,6 +19,7 @@ warnings.filterwarnings("ignore")
 class YOLO:
     
     def __init__(self, *args, **kwargs):
+
         self.weights = None
         self.net = None
         self.outputs = None
@@ -30,12 +36,15 @@ class YOLO:
         ln = [ln[i - 1] for i in self.net.getUnconnectedOutLayers()]
         self.layer_names = ln
         
-      
+     
+    # Appropriately named for real-time clf (not just snapshot)
     def retrain(self, img):
         # construct a blob from the image
-        blob = cv.dnn.blobFromImage(img, 1/255.0, (416, 416), swapRB=True, crop=False)     
+        blob = cv.dnn.blobFromImage(img, 1/255.0, (416, 416), swapRB=True, crop=False)  
+        print(f"blob shape: {blob.shape}")
         self.net.setInput(blob)
         self.outputs = self.net.forward(self.layer_names)
+
         
     def drawRectangles(self, img):
         boxes = []
@@ -48,7 +57,7 @@ class YOLO:
                 scores = detection[5:]
                 classID = np.argmax(scores)
                 confidence = scores[classID]
-                if confidence > 0.9:
+                if confidence > 0.65:
                     box = detection[:4] * np.array([w, h, w, h])
                     (centerX, centerY, width, height) = box.astype("int")
                     x = int(centerX - (width / 2))
@@ -69,8 +78,35 @@ class YOLO:
         
         return boxes
     
-    def kmeans(self):
-        pass
+    def organized_clusters(self, img, rectangles, n_groups=2):        
+        model = KMeans(n_clusters=n_groups)
+        
+        # First get data on each rectangle
+        found_objects = []
+        cropped_img = None
+        
+        
+        for data_point in rectangles:
+            # Extract image given the data_point
+            colLower, rowLower, colUpper, rowUpper = data_point
+            colUpper += colLower
+            rowUpper += rowLower
+            cropped_img = img[rowLower:rowUpper, colLower: colUpper]
+            
+            # Must be of homogenous type for np array
+            cropped_img = cv.dnn.blobFromImage(cropped_img, 1/255.0,
+                                              (416, 416),
+                                                swapRB=True, crop=False)
+            cropped_img = cropped_img.reshape(416, 416, 3)[:, :, 0]
+            found_objects.append(cropped_img.reshape(416*416,))
+            
+        
+        # Flattening the image to have total ndim=2
+        cluster_classes = model.fit_predict(found_objects)
+        
+        return found_objects, cluster_classes
+
+
  
 def main():
     yolo_model = YOLO()
@@ -140,9 +176,101 @@ def main():
     cv.imshow("Here is how you should clean the mess", image)
     cv.waitKey(0)
     cv.destroyAllWindows()
+        
+# Alternative to real-time snapshot
+def box_image(image_path):
+    assert image_path is not None
+    try:
+        img = cv.imread(image_path)
+        img = cv.resize(img, (960, 540))
 
-if __name__ == '__main__':
-    main()
+    except FileNotFoundError:
+        print("No such file exists")
+    except Exception as e:
+        print(type(e))
+    else:
+        yolo_model = YOLO()
+        yolo_model.deviseModel()
+        yolo_model.retrain(img)
+        rectangles = yolo_model.drawRectangles(img)
+        found, clusters = yolo_model.organized_clusters(img, rectangles)
+    
+    fig, ax = plt.subplots()
+    ax.imshow(img)
+    
+    colors = ["red", "blue", "yellow", "purple", "green"]
+    
+    # Create a rectangle patches
+    for idx, box in enumerate(rectangles):
+        x, y, w, h = box
+        rect = patches.Rectangle((x, y), w, h, linewidth=1,
+                                  edgecolor=colors[clusters[idx]],
+                                  facecolor='none')
+        ax.add_patch(rect)
+        
+    plt.show()
+    
+    return found, clusters
+
+    
+
+
+# if __name__ == '__main__':
+#     main()
+
+
+
+
+# Needs reshaping functionality
+def image_collage(images, clusters):
+    n_images = len(images)
+    n_rows = n_images
+    n_cols = 1
+    
+    for N in range(1, n_images+1):
+        if n_images % N == 0:
+            if abs(n_rows - n_cols) > abs(n_images/N - N):
+                n_rows, n_cols = int(n_images/N), int(N)
+        
+    
+    fig, axs = plt.subplots(nrows=n_rows, ncols=n_cols)
+    
+    
+    # Or reshaping list images
+    currIdx = 0
+    for row in range(n_rows):
+        
+        for col in range(n_cols):
+            axs[row, col].set_xticks([])
+            axs[row, col].set_yticks([clusters[currIdx]])
+            axs[row, col].set_yticklabels([clusters[currIdx]], fontsize=45)  
+            axs[row, col].imshow(images[currIdx].reshape(416, 416))
+            currIdx += 1
+    
+        
+    fig.set_size_inches(18.5, 10.5)
+    fig.set_figwidth(25)
+    fig.set_figheight(25)
+    fig.savefig("ImageDataBase/cluster_collage.jpg", dpi=100)
+
+    plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
